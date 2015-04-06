@@ -17,23 +17,24 @@ This is a side-project with me having not much time, so if you stumble upon that
 - Displaying photo metadata - shutter, aperture, iso, time taken, location (on a map perhaps?)
 - Single `.dotfile` in photo directory root for thumbnails, metadata and index database
 - Metadata stored as plain text or json files
-- Making no other changes to photo directory structure
+- Make no other changes to photo directory structure
 - Database used only for metadata index (for browsing performance), can be recreated
+- Make use of filesystem change monitoring for realtime index updates
 - Nice, web-based UI
-- Make use of filesystem change monitoring for realtime index updates and providing instant UI updates through websockets
+- Provide realtime UI updates through websockets
 
 # Plan (to do)
 
-- Photos folder crawling
+- Photos folder crawler
 - Generate image file's SHA1 checksum for tracking files moved or detecting image file content change (for cases where e.g. the Windows photo viewer modifies the photo on rotation)
-- Generating thumbnails for JPEGs, skipping those already processed and unchanged
+- Generate thumbnails for JPEGs, skipping those already processed and unchanged
 - Simple web UI for browsing photos (only JPEGs for now)
-- Star photo
+- Favorite photo
 - Use a key-value store for metadata index
-- Show starred photos
+- Show favorite photos
 - Tag photo
 - Show photos with given tag(s)
-- Star photo
+- Rate photo
 - Show photos with at least n stars
 - Thumbnails for CR2
 - TBD
