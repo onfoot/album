@@ -3,11 +3,11 @@ Server-side application for hosting home photo albums
 
 # Motivation
 
-Photos copied from camera's card to a home server become hard to come back to, because it's hard to organize them, there's no way to rate, star and tag them without special software installed on the home computers accessing them, not to mention phones and tablets.
+Photos copied from camera's card to a home server become hard to come back to, because it's hard to organize them. Also, there's no way to rate, favorite and tag them without special software installed on the home computers accessing them a shared library, not to mention phones and tablets.
 
-I don't want to share my family photos with the "cloud" just because it's easier to do all those things. I'd like to be able to experience them in a way that's as close to browsing the classic family albums as possible, while getting access to some great possibilities technology gives us.
+I don't want to share my family photos with the "cloud" just because it's easier to do all those things. I'd like to be able to experience my private library in a way that's as easy and accessible as classic family albums, while adding some cool organizational features.
 
-This is a side-project with me having not much time, so if you stumble upon that project and want to help in any way possible, that would be great. Pull requests, issues, ideas welcome. Knowledge of Go and html, css, javascript, react(?) will be useful.
+This is a side-project with me having not much time, so if you stumble upon it and want to help in any way possible, pull requests, issues, ideas welcome. Knowledge of Go or html, css, javascript, and probably react, will be useful.
 
 # Goals
 
