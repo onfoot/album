@@ -42,7 +42,7 @@ func walker(path string, info os.FileInfo, err error) error {
 			normalizedPath := strings.TrimPrefix(path, *root)
 			normalizedPath = strings.TrimPrefix(normalizedPath, "/")
 
-			metaDataPath := filepath.Join(metaRoot, normalizedPath) + ".sha1"
+			metaDataPath := filepath.Join(metaRoot, "hash", normalizedPath) + ".sha1"
 
 			hashFile, hashFileErr := os.Open(metaDataPath)
 
