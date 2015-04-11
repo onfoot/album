@@ -24,14 +24,14 @@ This is a side-project with me having not much time, so if you stumble upon it a
 - Provide realtime UI updates through websockets
 
 # Plan (to do)
-
-- Photos folder crawler
-- Generate image file's SHA1 checksum for tracking files moved or detecting image file content change (for cases where e.g. the Windows photo viewer modifies the photo on rotation)
+- ~~Photos folder crawler~~
+- ~~Generate image file's SHA1 checksum~~
 - Generate thumbnails for JPEGs, skipping those already processed and unchanged
 - Simple web UI for browsing photos (only JPEGs for now)
-- Favorite photo
+- Favorite a photo
 - Use a key-value store for metadata index (boltdb?)
 - Show favorite photos
+- Track files moved or detecting image file content change (for cases where e.g. the Windows photo viewer modifies the photo on rotation) - use hashes and metadata index; even though files might be moved or modified, their metadata will follow them
 - Tag photo
 - Show photos with given tag(s)
 - Tag autocompletion
