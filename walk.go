@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,12 +19,12 @@ var metaDir = ".album"
 
 var root = flag.String("root", "", "Album root")
 var testMode = flag.Bool("test", false, "Test mode")
+var httpAddress = flag.String("http", ":8080", "Default listening http address")
 
 var metaRoot string
 
 type HashingTask struct {
 	path     string
-	info     os.FileInfo
 	root     string
 	metaRoot string
 }
@@ -76,8 +77,6 @@ var Usage = func() {
 	flag.PrintDefaults()
 }
 
-// var hasher = make(chan HashingTask, runtime.NumCPU())
-
 func main() {
 	flag.Parse()
 
@@ -96,42 +95,43 @@ func main() {
 	log.Println("Meta dir: " + metaDir)
 	log.Println("Root: " + *root)
 
-	var tasksCount int
-	var fileCount int
+	workerCount := runtime.NumCPU()
+	worker := make(chan HashingTask, workerCount)
 
-	workerChan := make(chan HashingTask, runtime.NumCPU())
-	counterChan := make(chan int)
+	counting := make(chan int)
 
-	finishChan := make(chan int)
+	photos := []string{}
 
-	go func() {
-		for {
-			val, ok := <-counterChan
-			if !ok {
-				return
-			}
+	photoWalker := PhotoWalker{}
+	photoWalker.walkFunc = func(path string, info os.FileInfo) {
+		photos = append(photos, path)
+	}
 
-			if val > 0 {
-				tasksCount++
-			}
+	walkErr := filepath.Walk(*root, photoWalker.photoWalker())
+	if walkErr != nil {
+		log.Fatal(walkErr.Error())
+	}
 
-			if tasksCount == fileCount {
-				finishChan <- 1
-			}
+	fileCount := len(photos)
+	taskCount := 0
 
-		}
-	}()
+	finishing := make(chan int)
 
-	for i := 0; i < runtime.NumCPU(); i++ {
-		go func() {
+	for i := 0; i != workerCount; i++ {
+		go func(i int, in chan HashingTask) {
 			for {
-				task := <-workerChan
+				task, ok := <-in
+
+				if !ok {
+					break
+				}
 
 				file, fileErr := os.Open(task.path)
 
 				if fileErr != nil {
-					log.Println("Could not read photo file at", task.path)
-					continue
+					log.Println("Could not read photo file at", task.path, fileErr)
+					counting <- 1
+					break
 				}
 
 				sha := sha1.New()
@@ -143,53 +143,59 @@ func main() {
 
 				hashPath := HashPath(task.path, task.root, task.metaRoot)
 
-				hashFile, hashFileErr := os.Open(hashPath)
-
-				if hashFileErr == nil {
-					currentSum := make([]byte, 20)
-					hashFile.Read(currentSum)
-
+				if currentSum, hashErr := ioutil.ReadFile(hashPath); hashErr == nil {
 					if string(currentSum) == string(sum) {
+						log.Println("Skipping", task.path)
+						counting <- 1
+						break
 					}
 
-					hashFile.Close()
-					counterChan <- 1
-					log.Println("Skipping", task.path)
-					continue
 				}
 
 				if !(*testMode) {
-
 					os.MkdirAll(filepath.Dir(hashPath), 0755)
-					hashFile, hashFileErr := os.Create(hashPath)
-
-					if hashFileErr == nil {
-						hashFile.Write(sum)
-						hashFile.Close()
-					} else {
-						log.Println("Could not write hash file: ", hashFileErr)
+					if hashErr := ioutil.WriteFile(hashPath, sum, 0666); hashErr != nil {
+						log.Println("Could not write hash file: ", hashErr)
 					}
 				}
 
-				log.Println("Task done for", task.path)
-				counterChan <- 1
+				log.Println("processed", task.path)
+				counting <- 1
 			}
-		}()
+		}(i, worker)
 	}
 
-	photoWalker := PhotoWalker{}
-	photoWalker.walkFunc = func(path string, info os.FileInfo) {
-		fileCount++
-		workerChan <- HashingTask{path, info, *root, metaRoot}
-	}
+	go func() {
+		for _, path := range photos {
+			task := HashingTask{path, *root, metaRoot}
+			worker <- task
+		}
+	}()
 
-	walkErr := filepath.Walk(*root, photoWalker.photoWalker())
+	go func() {
+		for {
+			count, ok := <-counting
+			if !ok {
+				break
+			}
 
-	if walkErr != nil {
-		log.Fatal(walkErr.Error())
-	}
+			taskCount += count
 
-	<-finishChan
-	close(workerChan)
-	log.Printf("%d files processed", fileCount)
+			if taskCount == fileCount {
+				close(finishing)
+				break
+			}
+		}
+	}()
+
+	<-finishing
+	close(worker)
+	close(counting)
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "<!doctype html><html><body>Hi, you have %d photos</body></html>", len(photos))
+	})
+
+	log.Println("Listening on", *httpAddress)
+	log.Fatal(http.ListenAndServe(*httpAddress, nil))
 }
