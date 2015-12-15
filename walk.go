@@ -98,8 +98,6 @@ func main() {
 	workerCount := runtime.NumCPU()
 	worker := make(chan HashingTask, workerCount)
 
-	counting := make(chan int)
-
 	photos := []string{}
 
 	photoWalker := PhotoWalker{}
@@ -113,25 +111,27 @@ func main() {
 	}
 
 	fileCount := len(photos)
-	taskCount := 0
+	counting := make(chan int)
 
-	finishing := make(chan int)
+	ticking := make(chan int, workerCount)
+	finishing := make(chan bool)
 
-	for i := 0; i != workerCount; i++ {
-		go func(i int, in chan HashingTask) {
-			for {
-				task, ok := <-in
+	go func(work chan HashingTask) {
+		for task := range work {
+			ticking <- 1
 
-				if !ok {
-					break
-				}
+			task := task
 
+			go func() {
+				log.Println("Starting work on", task.path)
 				file, fileErr := os.Open(task.path)
 
 				if fileErr != nil {
 					log.Println("Could not read photo file at", task.path, fileErr)
+					<-ticking
 					counting <- 1
-					break
+
+					return
 				}
 
 				sha := sha1.New()
@@ -146,10 +146,12 @@ func main() {
 				if currentSum, hashErr := ioutil.ReadFile(hashPath); hashErr == nil {
 					if string(currentSum) == string(sum) {
 						log.Println("Skipping", task.path)
-						counting <- 1
-						break
-					}
 
+						<-ticking
+						counting <- 1
+
+						return
+					}
 				}
 
 				if !(*testMode) {
@@ -160,10 +162,13 @@ func main() {
 				}
 
 				log.Println("processed", task.path)
+				<-ticking
 				counting <- 1
-			}
-		}(i, worker)
-	}
+
+			}()
+
+		}
+	}(worker)
 
 	go func() {
 		for _, path := range photos {
@@ -173,24 +178,22 @@ func main() {
 	}()
 
 	go func() {
-		for {
-			count, ok := <-counting
-			if !ok {
-				break
-			}
+		taskCount := 0
 
+		for count := range counting {
 			taskCount += count
 
 			if taskCount == fileCount {
-				close(finishing)
-				break
+				close(counting)
+				finishing <- true
+				return
 			}
+
 		}
 	}()
 
 	<-finishing
-	close(worker)
-	close(counting)
+	close(ticking)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<!doctype html><html><body>Hi, you have %d photos</body></html>", len(photos))
