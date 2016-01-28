@@ -26,7 +26,7 @@ This is a side-project with me having not much time, so if you stumble upon it a
 # Plan (to do)
 - ~~Photos folder crawler~~
 - ~~Generate image file's SHA1 checksum~~
-- Generate thumbnails for JPEGs, skipping those already processed and unchanged
+- ~~Generate thumbnails for JPEGs~~, skipping those already processed and unchanged
 - Simple web UI for browsing photos (only JPEGs for now)
 - Favorite/love a photo
 - Use a key-value store for metadata index (boltdb?)
