@@ -2,16 +2,22 @@ package main
 
 import (
 	"crypto/sha1"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/nfnt/resize"
 )
 
 var extensions = []string{".jpg", ".jpeg", ".JPG", ".JPEG"}
@@ -23,10 +29,11 @@ var httpAddress = flag.String("http", ":8080", "Default listening http address")
 
 var metaRoot string
 
-type HashingTask struct {
+type PhotoTask struct {
 	path     string
 	root     string
 	metaRoot string
+	hash     string
 }
 
 type PhotoWalker struct {
@@ -44,6 +51,14 @@ func (w PhotoWalker) photoWalker() filepath.WalkFunc {
 
 			if path == ".." {
 				return nil
+			}
+
+			if strings.HasSuffix(path, ".app") {
+				return filepath.SkipDir
+			}
+
+			if strings.HasSuffix(path, ".bundle") {
+				return filepath.SkipDir
 			}
 
 			if strings.HasPrefix(info.Name(), ".") {
@@ -72,6 +87,11 @@ func HashPath(path string, root string, metaRoot string) string {
 	return hashPath
 }
 
+func ThumbPath(hash string, root string, metaRoot string) string {
+	hashPath := filepath.Join(metaRoot, "thumbs", hash) + ".jpg"
+	return hashPath
+}
+
 var Usage = func() {
 	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 	flag.PrintDefaults()
@@ -96,9 +116,9 @@ func main() {
 	log.Println("Root: " + *root)
 
 	workerCount := runtime.NumCPU()
-	worker := make(chan HashingTask, workerCount)
 
 	photos := []string{}
+	hashes := make(map[string]string)
 
 	photoWalker := PhotoWalker{}
 	photoWalker.walkFunc = func(path string, info os.FileInfo) {
@@ -116,7 +136,9 @@ func main() {
 	ticking := make(chan int, workerCount)
 	finishing := make(chan bool)
 
-	go func(work chan HashingTask) {
+	hashWorker := make(chan PhotoTask, workerCount)
+
+	go func(work chan PhotoTask) {
 		for task := range work {
 			ticking <- 1
 
@@ -143,6 +165,8 @@ func main() {
 
 				hashPath := HashPath(task.path, task.root, task.metaRoot)
 
+				hashes[task.path] = hex.EncodeToString(sum)
+
 				if currentSum, hashErr := ioutil.ReadFile(hashPath); hashErr == nil {
 					if string(currentSum) == string(sum) {
 						log.Println("Skipping", task.path)
@@ -168,12 +192,125 @@ func main() {
 			}()
 
 		}
-	}(worker)
+	}(hashWorker)
 
 	go func() {
 		for _, path := range photos {
-			task := HashingTask{path, *root, metaRoot}
-			worker <- task
+			task := PhotoTask{path: path, root: *root, metaRoot: metaRoot}
+			hashWorker <- task
+		}
+	}()
+
+	go func() {
+		taskCount := 0
+
+		for count := range counting {
+			taskCount += count
+
+			if taskCount == fileCount {
+				close(counting)
+				finishing <- true
+				return
+			}
+
+		}
+	}()
+
+	<-finishing
+	close(ticking)
+
+	counting = make(chan int)
+
+	ticking = make(chan int, workerCount)
+	finishing = make(chan bool)
+
+	photoWorker := make(chan PhotoTask, workerCount)
+
+	go func(work chan PhotoTask) {
+		for task := range work {
+			ticking <- 1
+
+			task := task
+
+			go func() {
+				log.Printf("Starting thumbnail work on %s (%s)", task.path, task.hash)
+				file, fileErr := os.Open(task.path)
+
+				if fileErr != nil {
+					log.Println("Could not read photo file at", task.path, fileErr)
+					<-ticking
+					counting <- 1
+
+					return
+				}
+
+				img, imgErr := jpeg.Decode(file)
+
+				file.Close()
+
+				if imgErr != nil {
+					log.Printf("Jpeg decode error: %v", imgErr)
+					<-ticking
+					counting <- 1
+					return
+				}
+
+				maxDimension := 800.0
+				width := float64(img.Bounds().Max.X - img.Bounds().Min.X)
+				height := float64(img.Bounds().Max.Y - img.Bounds().Min.Y)
+
+				var dstWidth float64
+				var dstHeight float64
+
+				biggerDimension := math.Max(width, height)
+
+				if width < maxDimension && height < maxDimension {
+					dstWidth = width
+					dstHeight = height
+				} else {
+					scaleFactor := biggerDimension / maxDimension
+
+					dstWidth = width / scaleFactor
+					dstHeight = height / scaleFactor
+				}
+
+				udstWidth := uint(math.Ceil(dstWidth))
+				udstHeight := uint(math.Ceil(dstHeight))
+
+				var m image.Image
+				if dstWidth == width && dstHeight == height {
+					m = img
+				} else {
+					m = resize.Resize(udstWidth, udstHeight, img, resize.Bilinear)
+				}
+
+				thumbPath := ThumbPath(task.hash, task.root, task.metaRoot)
+
+				if !(*testMode) {
+					os.MkdirAll(filepath.Dir(thumbPath), 0755)
+
+					thumbFile, thumbErr := os.Create(thumbPath)
+					if thumbErr == nil {
+
+						jpeg.Encode(thumbFile, m, &jpeg.Options{Quality: 85})
+
+						thumbFile.Close()
+					}
+				}
+
+				log.Printf("processed image, %0.fx%0.f, thumbnail is %0.fx%0.f", width, height, dstWidth, dstHeight)
+				<-ticking
+
+				counting <- 1
+			}()
+
+		}
+	}(photoWorker)
+
+	go func() {
+		for _, path := range photos {
+			task := PhotoTask{path: path, root: *root, metaRoot: metaRoot, hash: hashes[path]}
+			photoWorker <- task
 		}
 	}()
 
