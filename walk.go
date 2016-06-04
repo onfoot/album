@@ -165,10 +165,12 @@ func main() {
 
 				hashPath := HashPath(task.path, task.root, task.metaRoot)
 
-				hashes[task.path] = hex.EncodeToString(sum)
+				sumHex := hex.EncodeToString(sum)
 
-				if currentSum, hashErr := ioutil.ReadFile(hashPath); hashErr == nil {
-					if string(currentSum) == string(sum) {
+				hashes[task.path] = sumHex
+
+				if currentSumHex, hashErr := ioutil.ReadFile(hashPath); hashErr == nil {
+					if string(currentSumHex) == sumHex {
 						log.Println("Skipping", task.path)
 
 						<-ticking
@@ -180,12 +182,20 @@ func main() {
 
 				if !(*testMode) {
 					os.MkdirAll(filepath.Dir(hashPath), 0755)
-					if hashErr := ioutil.WriteFile(hashPath, sum, 0666); hashErr != nil {
-						log.Println("Could not write hash file: ", hashErr)
+					file, fileErr := os.Create(hashPath)
+
+					if fileErr != nil {
+						log.Println("Could not create hash file: ", fileErr)
+					} else {
+						defer file.Close()
+
+						if _, hashErr := file.WriteString(sumHex); hashErr != nil {
+							log.Println("Could not write hash file: ", hashErr)
+						}
 					}
 				}
 
-				log.Println("processed", task.path)
+				log.Println("Processed", task.path)
 				<-ticking
 				counting <- 1
 
