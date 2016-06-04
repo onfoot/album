@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/disintegration/imaging"
+	"github.com/nfnt/resize"
 	"github.com/rwcarlsen/goexif/exif"
 )
 
@@ -131,14 +132,12 @@ func ExifOrientation(r io.Reader) (int, FlipMode) {
 
 	tag, err := ex.Get(exif.Orientation)
 	if err != nil {
-		log.Println("No EXIF orientation tag: ", err)
 		return 0, 0
 	}
 
 	orientation, err := tag.Int(0)
 
 	if err != nil {
-		log.Printf("EXIF error %v", err)
 		return 0, 0
 	}
 
@@ -312,7 +311,6 @@ func main() {
 			task := task
 
 			go func() {
-				log.Printf("Starting thumbnail work on %s (%s)", task.path, task.hash)
 				file, fileErr := os.Open(task.path)
 
 				if fileErr != nil {
@@ -355,14 +353,14 @@ func main() {
 					dstHeight = height / scaleFactor
 				}
 
-				idstWidth := int(math.Ceil(dstWidth))
-				idstHeight := int(math.Ceil(dstHeight))
+				udstWidth := uint(math.Ceil(dstWidth))
+				udstHeight := uint(math.Ceil(dstHeight))
 
 				var m image.Image
 				if dstWidth == width && dstHeight == height {
 					m = img
 				} else {
-					m = imaging.Resize(img, idstWidth, idstHeight, imaging.Box)
+					m = resize.Resize(udstWidth, udstHeight, img, resize.Bilinear)
 				}
 
 				angle, flip := ExifOrientation(&exifBuffer)
