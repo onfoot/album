@@ -6,12 +6,10 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"image"
 	"image/jpeg"
 	"io"
 	"io/ioutil"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -334,35 +332,8 @@ func main() {
 					return
 				}
 
-				maxDimension := 800.0
-				width := float64(img.Bounds().Max.X - img.Bounds().Min.X)
-				height := float64(img.Bounds().Max.Y - img.Bounds().Min.Y)
-
-				var dstWidth float64
-				var dstHeight float64
-
-				biggerDimension := math.Max(width, height)
-
-				if width < maxDimension && height < maxDimension {
-					dstWidth = width
-					dstHeight = height
-				} else {
-					scaleFactor := biggerDimension / maxDimension
-
-					dstWidth = width / scaleFactor
-					dstHeight = height / scaleFactor
-				}
-
-				udstWidth := uint(math.Ceil(dstWidth))
-				udstHeight := uint(math.Ceil(dstHeight))
-
-				var m image.Image
-				if dstWidth == width && dstHeight == height {
-					m = img
-				} else {
-					m = resize.Resize(udstWidth, udstHeight, img, resize.Bilinear)
-				}
-
+				var maxDimension uint = 800
+				m := resize.Thumbnail(maxDimension, maxDimension, img, resize.Bilinear)
 				angle, flip := ExifOrientation(&exifBuffer)
 
 				switch angle {
@@ -395,7 +366,7 @@ func main() {
 					}
 				}
 
-				log.Printf("Processed image, %0.fx%0.f, thumbnail is %0.fx%0.f", width, height, dstWidth, dstHeight)
+				log.Printf("Processed image, %dx%d, thumbnail is %dx%d", img.Bounds().Size().X, img.Bounds().Size().Y, m.Bounds().Size().X, m.Bounds().Size().Y)
 				<-ticking
 
 				counting <- 1
