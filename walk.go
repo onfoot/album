@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"flag"
@@ -17,7 +18,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/nfnt/resize"
+	"github.com/disintegration/imaging"
+	"github.com/rwcarlsen/goexif/exif"
 )
 
 var extensions = []string{".jpg", ".jpeg", ".JPG", ".JPEG"}
@@ -28,6 +30,24 @@ var testMode = flag.Bool("test", false, "Test mode")
 var httpAddress = flag.String("http", ":8080", "Default listening http address")
 
 var metaRoot string
+
+type FlipMode int
+
+const (
+	FlipVertical FlipMode = 1 << iota
+	FlipHorizontal
+)
+
+const (
+	topLeftSide     = 1
+	topRightSide    = 2
+	bottomRightSide = 3
+	bottomLeftSide  = 4
+	leftSideTop     = 5
+	rightSideTop    = 6
+	rightSideBottom = 7
+	leftSideBottom  = 8
+)
 
 type PhotoTask struct {
 	path     string
@@ -95,6 +115,56 @@ func ThumbPath(hash string, root string, metaRoot string) string {
 var Usage = func() {
 	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 	flag.PrintDefaults()
+}
+
+func ExifOrientation(r io.Reader) (int, FlipMode) {
+	var (
+		angle int
+		flip  FlipMode
+	)
+
+	ex, err := exif.Decode(r)
+	if err != nil {
+		log.Println("Could not decode Exif information")
+		return 0, 0
+	}
+
+	tag, err := ex.Get(exif.Orientation)
+	if err != nil {
+		log.Println("No EXIF orientation tag: ", err)
+		return 0, 0
+	}
+
+	orientation, err := tag.Int(0)
+
+	if err != nil {
+		log.Printf("EXIF error %v", err)
+		return 0, 0
+	}
+
+	switch orientation {
+	case topLeftSide:
+		// no change required
+	case topRightSide:
+		flip = FlipHorizontal
+	case bottomRightSide:
+		angle = 180
+	case bottomLeftSide:
+		angle = 180
+		flip = FlipHorizontal
+	case leftSideTop:
+		angle = -90
+		flip = FlipHorizontal
+	case rightSideTop:
+		angle = -90
+	case rightSideBottom:
+		angle = 90
+		flip = FlipHorizontal
+	case leftSideBottom:
+		angle = 90
+	}
+
+	return angle, flip
 }
 
 func main() {
@@ -195,7 +265,6 @@ func main() {
 					}
 				}
 
-				log.Println("Processed", task.path)
 				<-ticking
 				counting <- 1
 
@@ -254,7 +323,9 @@ func main() {
 					return
 				}
 
-				img, imgErr := jpeg.Decode(file)
+				var exifBuffer bytes.Buffer
+
+				img, imgErr := jpeg.Decode(io.TeeReader(file, &exifBuffer))
 
 				file.Close()
 
@@ -284,14 +355,32 @@ func main() {
 					dstHeight = height / scaleFactor
 				}
 
-				udstWidth := uint(math.Ceil(dstWidth))
-				udstHeight := uint(math.Ceil(dstHeight))
+				idstWidth := int(math.Ceil(dstWidth))
+				idstHeight := int(math.Ceil(dstHeight))
 
 				var m image.Image
 				if dstWidth == width && dstHeight == height {
 					m = img
 				} else {
-					m = resize.Resize(udstWidth, udstHeight, img, resize.Bilinear)
+					m = imaging.Resize(img, idstWidth, idstHeight, imaging.Box)
+				}
+
+				angle, flip := ExifOrientation(&exifBuffer)
+
+				switch angle {
+				case 90:
+					m = imaging.Rotate90(m)
+				case -90:
+					m = imaging.Rotate270(m)
+				case 180:
+					m = imaging.Rotate180(m)
+				}
+
+				switch flip {
+				case FlipHorizontal:
+					m = imaging.FlipH(m)
+				case FlipVertical:
+					m = imaging.FlipV(m)
 				}
 
 				thumbPath := ThumbPath(task.hash, task.root, task.metaRoot)
@@ -308,7 +397,7 @@ func main() {
 					}
 				}
 
-				log.Printf("processed image, %0.fx%0.f, thumbnail is %0.fx%0.f", width, height, dstWidth, dstHeight)
+				log.Printf("Processed image, %0.fx%0.f, thumbnail is %0.fx%0.f", width, height, dstWidth, dstHeight)
 				<-ticking
 
 				counting <- 1
