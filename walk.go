@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"image"
 	"image/jpeg"
 	"io"
 	"io/ioutil"
@@ -22,13 +23,26 @@ import (
 )
 
 var extensions = []string{".jpg", ".jpeg", ".JPG", ".JPEG"}
+var root = flag.String("root", ".", "Root content directory")
 var metaDir = ".album"
-
-var root = flag.String("root", "", "Album root")
 var testMode = flag.Bool("test", false, "Test mode")
 var httpAddress = flag.String("http", ":8080", "Default listening http address")
 
-var metaRoot string
+func HashPath(metaRoot string, hash string) string {
+	hashPath := filepath.Join(metaRoot, "hash", hash) + ".sha1"
+	return hashPath
+}
+
+func ThumbPath(metaRoot string, hash string) string {
+	hashPath := filepath.Join(metaRoot, "thumbs", hash) + ".jpg"
+	return hashPath
+}
+
+type Info struct {
+	Path     string
+	FileInfo os.FileInfo
+	Hash     []byte
+}
 
 type FlipMode int
 
@@ -48,72 +62,140 @@ const (
 	leftSideBottom  = 8
 )
 
-type PhotoTask struct {
-	path     string
-	root     string
-	metaRoot string
-	hash     string
-}
+func Walker() <-chan Info {
+	out := make(chan Info)
 
-type PhotoWalker struct {
-	walkFunc func(path string, info os.FileInfo)
-}
+	go func() {
+		filepath.Walk(*root, func(path string, info os.FileInfo, err error) error {
 
-func (w PhotoWalker) photoWalker() filepath.WalkFunc {
-	return func(path string, info os.FileInfo, err error) error {
+			if info.IsDir() {
 
-		if info.IsDir() {
+				if path == "." {
+					return nil
+				}
 
-			if path == "." {
+				if strings.HasPrefix(info.Name(), ".") {
+					log.Println("Skipping hidden dir", info.Name())
+					return filepath.SkipDir
+				}
+
+				if strings.HasSuffix(path, ".app") {
+					log.Println("Skipping app")
+					return filepath.SkipDir
+				}
+
+				if strings.HasSuffix(path, ".bundle") {
+					log.Println("Skipping bundle")
+					return filepath.SkipDir
+				}
+
+				if strings.HasSuffix(path, ".photoslibrary") {
+					log.Println("Skipping iPhoto library bundle")
+					return filepath.SkipDir
+				}
+
+				if strings.HasSuffix(path, ".photolibrary") {
+					log.Println("Skipping Photos library bundle")
+					return filepath.SkipDir
+				}
+
 				return nil
 			}
 
-			if path == ".." {
-				return nil
-			}
-
-			if strings.HasSuffix(path, ".app") {
-				return filepath.SkipDir
-			}
-
-			if strings.HasSuffix(path, ".bundle") {
-				return filepath.SkipDir
-			}
-
-			if strings.HasPrefix(info.Name(), ".") {
-				return filepath.SkipDir
+			for _, ext := range extensions {
+				if ext == filepath.Ext(info.Name()) {
+					out <- Info{Path: path, FileInfo: info}
+					break
+				}
 			}
 
 			return nil
-		}
+		})
+		close(out)
+	}()
 
-		for _, ext := range extensions {
-			if ext == filepath.Ext(info.Name()) {
-				w.walkFunc(path, info)
-				return nil
-			}
-		}
+	return out
+}
 
-		return nil
+func Hash(info Info) ([]byte, error) {
+
+	file, err := os.Open(info.Path)
+	if err != nil {
+		return []byte{}, err
 	}
+
+	sha := sha1.New()
+	io.Copy(sha, file)
+
+	file.Close()
+
+	sum := sha.Sum(nil)
+
+	return sum, nil
 }
 
-func HashPath(path string, root string, metaRoot string) string {
-	normalizedPath := strings.TrimPrefix(path, root)
-	normalizedPath = strings.TrimPrefix(normalizedPath, "/")
+func Hasher(in <-chan Info) <-chan Info {
+	out := make(chan Info)
+	done := make(chan bool)
 
-	hashPath := filepath.Join(metaRoot, "hash", normalizedPath) + ".sha1"
-	return hashPath
-}
+	count := runtime.NumCPU() * 2
 
-func ThumbPath(hash string, root string, metaRoot string) string {
-	hashPath := filepath.Join(metaRoot, "thumbs", hash) + ".jpg"
-	return hashPath
-}
+	for i := 0; i != count; i++ {
+		go func(in <-chan Info) {
+			for {
+				info, ok := <-in
 
-var Usage = func() {
-	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-	flag.PrintDefaults()
+				if !ok {
+					done <- true
+					return
+				}
+
+				result, err := Hash(info)
+
+				if err != nil {
+					log.Fatalf("Hashing error for %v: %v", info.Path, err)
+				}
+
+				hashHex := hex.EncodeToString(result)
+
+				hashPath := HashPath(metaRoot, hashHex)
+
+				currentHashHex, err := ioutil.ReadFile(hashPath)
+
+				info.Hash = result
+
+				if err != nil || string(currentHashHex) != hashHex {
+
+					if !(*testMode) {
+						os.MkdirAll(filepath.Dir(hashPath), 0755)
+						file, err := os.Create(hashPath)
+
+						if err != nil {
+							log.Fatalf("Could not create hash file: %v", err)
+						} else {
+							if _, err := file.WriteString(info.Path); err != nil {
+								log.Fatalf("Could not write to hash file %v", err)
+							}
+
+							file.Close()
+						}
+					}
+				}
+
+				out <- info
+			}
+
+		}(in)
+	}
+
+	go func() {
+		for i := 0; i != count; i++ {
+			<-done
+		}
+		close(out)
+	}()
+
+	return out
 }
 
 func ExifOrientation(r io.Reader) (int, FlipMode) {
@@ -164,13 +246,111 @@ func ExifOrientation(r io.Reader) (int, FlipMode) {
 	return angle, flip
 }
 
+func Thumbnail(info Info) (image.Image, error) {
+
+	file, err := os.Open(info.Path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var exifBuffer bytes.Buffer
+
+	img, imgErr := jpeg.Decode(io.TeeReader(file, &exifBuffer))
+
+	if imgErr != nil {
+		log.Printf("Jpeg decode error: %v", imgErr)
+		return nil, imgErr
+	}
+
+	m := resize.Thumbnail(800, 800, img, resize.Bilinear)
+	angle, flip := ExifOrientation(&exifBuffer)
+
+	switch angle {
+	case 90:
+		m = imaging.Rotate90(m)
+	case -90:
+		m = imaging.Rotate270(m)
+	case 180:
+		m = imaging.Rotate180(m)
+	}
+
+	switch flip {
+	case FlipHorizontal:
+		m = imaging.FlipH(m)
+	case FlipVertical:
+		m = imaging.FlipV(m)
+	}
+
+	return m, nil
+}
+
+func Thumbnailer(in <-chan Info) <-chan Info {
+	out := make(chan Info)
+	done := make(chan bool)
+
+	count := runtime.NumCPU() * 2
+
+	for i := 0; i != count; i++ {
+		go func(in <-chan Info) {
+			for {
+				info, ok := <-in
+
+				if !ok {
+					done <- true
+					return
+				}
+
+				thumbPath := ThumbPath(metaRoot, hex.EncodeToString(info.Hash))
+				thumbFile, err := os.Open(thumbPath)
+
+				thumbFile.Close()
+
+				if err != nil {
+					thumb, resultErr := Thumbnail(info)
+
+					if resultErr != nil {
+						log.Fatalf("Could not create a thumbnail: %v", resultErr)
+					}
+
+					if !(*testMode) {
+						os.MkdirAll(filepath.Dir(thumbPath), 0755)
+						file, err := os.Create(thumbPath)
+
+						if err != nil {
+							log.Fatalf("Could not create thumbnail file: %v", err)
+						} else {
+							jpeg.Encode(file, thumb, &jpeg.Options{Quality: 85})
+							file.Close()
+						}
+					}
+				}
+
+				out <- info
+			}
+
+		}(in)
+	}
+
+	go func() {
+		for i := 0; i != count; i++ {
+			<-done
+		}
+		close(out)
+	}()
+
+	return out
+}
+
+var Usage = func() {
+	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+	flag.PrintDefaults()
+}
+
+var metaRoot string
+
 func main() {
 	flag.Parse()
-
-	if *root == "" {
-		Usage()
-		return
-	}
 
 	*root = filepath.Clean(*root)
 	metaRoot = filepath.Join(*root, metaDir)
@@ -182,223 +362,17 @@ func main() {
 	log.Println("Meta dir: " + metaDir)
 	log.Println("Root: " + *root)
 
-	workerCount := runtime.NumCPU()
+	walk := Walker()
+	hash := Hasher(walk)
+	thumb := Thumbnailer(hash)
 
 	photos := []string{}
-	hashes := make(map[string]string)
 
-	photoWalker := PhotoWalker{}
-	photoWalker.walkFunc = func(path string, info os.FileInfo) {
-		photos = append(photos, path)
+	for info := range thumb {
+		photos = append(photos, hex.EncodeToString(info.Hash))
 	}
 
-	walkErr := filepath.Walk(*root, photoWalker.photoWalker())
-	if walkErr != nil {
-		log.Fatal(walkErr.Error())
-	}
-
-	fileCount := len(photos)
-	counting := make(chan int)
-
-	ticking := make(chan int, workerCount)
-	finishing := make(chan bool)
-
-	hashWorker := make(chan PhotoTask, workerCount)
-
-	go func(work chan PhotoTask) {
-		for task := range work {
-			ticking <- 1
-
-			task := task
-
-			go func() {
-				log.Println("Starting work on", task.path)
-				file, fileErr := os.Open(task.path)
-
-				if fileErr != nil {
-					log.Println("Could not read photo file at", task.path, fileErr)
-					<-ticking
-					counting <- 1
-
-					return
-				}
-
-				sha := sha1.New()
-				io.Copy(sha, file)
-
-				file.Close()
-
-				sum := sha.Sum(nil)
-
-				hashPath := HashPath(task.path, task.root, task.metaRoot)
-
-				sumHex := hex.EncodeToString(sum)
-
-				hashes[task.path] = sumHex
-
-				if currentSumHex, hashErr := ioutil.ReadFile(hashPath); hashErr == nil {
-					if string(currentSumHex) == sumHex {
-						log.Println("Skipping", task.path)
-
-						<-ticking
-						counting <- 1
-
-						return
-					}
-				}
-
-				if !(*testMode) {
-					os.MkdirAll(filepath.Dir(hashPath), 0755)
-					file, fileErr := os.Create(hashPath)
-
-					if fileErr != nil {
-						log.Println("Could not create hash file: ", fileErr)
-					} else {
-						defer file.Close()
-
-						if _, hashErr := file.WriteString(sumHex); hashErr != nil {
-							log.Println("Could not write hash file: ", hashErr)
-						}
-					}
-				}
-
-				<-ticking
-				counting <- 1
-
-			}()
-
-		}
-	}(hashWorker)
-
-	go func() {
-		for _, path := range photos {
-			task := PhotoTask{path: path, root: *root, metaRoot: metaRoot}
-			hashWorker <- task
-		}
-	}()
-
-	go func() {
-		taskCount := 0
-
-		for count := range counting {
-			taskCount += count
-
-			if taskCount == fileCount {
-				close(counting)
-				finishing <- true
-				return
-			}
-
-		}
-	}()
-
-	<-finishing
-	close(ticking)
-
-	counting = make(chan int)
-
-	ticking = make(chan int, workerCount)
-	finishing = make(chan bool)
-
-	photoWorker := make(chan PhotoTask, workerCount)
-
-	go func(work chan PhotoTask) {
-		for task := range work {
-			ticking <- 1
-
-			task := task
-
-			go func() {
-				file, fileErr := os.Open(task.path)
-
-				if fileErr != nil {
-					log.Println("Could not read photo file at", task.path, fileErr)
-					<-ticking
-					counting <- 1
-
-					return
-				}
-
-				var exifBuffer bytes.Buffer
-
-				img, imgErr := jpeg.Decode(io.TeeReader(file, &exifBuffer))
-
-				file.Close()
-
-				if imgErr != nil {
-					log.Printf("Jpeg decode error: %v", imgErr)
-					<-ticking
-					counting <- 1
-					return
-				}
-
-				var maxDimension uint = 800
-				m := resize.Thumbnail(maxDimension, maxDimension, img, resize.Bilinear)
-				angle, flip := ExifOrientation(&exifBuffer)
-
-				switch angle {
-				case 90:
-					m = imaging.Rotate90(m)
-				case -90:
-					m = imaging.Rotate270(m)
-				case 180:
-					m = imaging.Rotate180(m)
-				}
-
-				switch flip {
-				case FlipHorizontal:
-					m = imaging.FlipH(m)
-				case FlipVertical:
-					m = imaging.FlipV(m)
-				}
-
-				thumbPath := ThumbPath(task.hash, task.root, task.metaRoot)
-
-				if !(*testMode) {
-					os.MkdirAll(filepath.Dir(thumbPath), 0755)
-
-					thumbFile, thumbErr := os.Create(thumbPath)
-					if thumbErr == nil {
-
-						jpeg.Encode(thumbFile, m, &jpeg.Options{Quality: 85})
-
-						thumbFile.Close()
-					}
-				}
-
-				log.Printf("Processed image, %dx%d, thumbnail is %dx%d", img.Bounds().Size().X, img.Bounds().Size().Y, m.Bounds().Size().X, m.Bounds().Size().Y)
-				<-ticking
-
-				counting <- 1
-			}()
-
-		}
-	}(photoWorker)
-
-	go func() {
-		for _, path := range photos {
-			task := PhotoTask{path: path, root: *root, metaRoot: metaRoot, hash: hashes[path]}
-			photoWorker <- task
-		}
-	}()
-
-	go func() {
-		taskCount := 0
-
-		for count := range counting {
-			taskCount += count
-
-			if taskCount == fileCount {
-				close(counting)
-				finishing <- true
-				return
-			}
-
-		}
-	}()
-
-	<-finishing
-	close(ticking)
+	log.Printf("Processed %v files", len(photos))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<!doctype html><html><body>Hi, you have %d photos</body></html>", len(photos))
