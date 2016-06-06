@@ -7,7 +7,7 @@ Photos copied from camera's card to a home server become hard to come back to, b
 
 I don't want to share my family photos with the "cloud" just because it's easier to do all those things. I'd like to be able to experience my private library in a way that's as easy and accessible as classic family albums, while adding some cool organizational features.
 
-This is a side-project with me having not much time, so if you stumble upon it and want to help in any way possible, pull requests, issues, ideas welcome. Knowledge of Go or html, css, javascript, and probably react, will be useful.
+This is a side-project with me having not much time, so if you stumble upon it and want to help in any way possible, pull requests, issues, ideas welcome. Knowledge of Go or HTML, CSS, Javascript, and probably React (or Aurelia?), will be useful.
 
 # Goals
 
@@ -27,7 +27,8 @@ This is a side-project with me having not much time, so if you stumble upon it a
 - ~~Photos folder crawler~~
 - ~~Generate image file's SHA1 checksum~~
 - ~~Generate thumbnails for JPEGs, skipping those already processed and unchanged~~
-- Simple web UI for browsing photos (only JPEGs for now)
+- Extract metadata from photos - date taken, GPS coordinates, basic photo parameters. If there is no EXIF data, photo file modification date is used as photo's date of origin
+- Simple web UI for browsing photos (only JPEGs for now) - photos are organized by year/month/day by default
 - Favorite/love a photo
 - Use a key-value store for metadata index (boltdb?)
 - Show favorited/loved photos
@@ -45,4 +46,5 @@ This is a side-project with me having not much time, so if you stumble upon it a
 - Face recognition for autotagging (OpenCV includes algorithms for that)
 - Rate photo?
 - Show photos with at least/at most n stars?
+- Contrast detection to find blurry or badly focused photos
 - TBD
