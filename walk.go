@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/disintegration/imaging"
 	"github.com/nfnt/resize"
@@ -198,59 +199,78 @@ func Hasher(in <-chan Info) <-chan Info {
 	return out
 }
 
-func ExifOrientation(r io.Reader) (int, FlipMode) {
-	var (
-		angle int
-		flip  FlipMode
-	)
+type LatLong struct {
+	Lat  float64
+	Long float64
+}
+
+type Metadata struct {
+	Angle   int
+	Flip    FlipMode
+	Taken   *time.Time
+	LatLong *LatLong
+}
+
+func ExifExtract(r io.Reader) Metadata {
+	var meta Metadata
 
 	ex, err := exif.Decode(r)
 	if err != nil {
 		log.Println("Could not decode Exif information")
-		return 0, 0
+		return meta
 	}
 
 	tag, err := ex.Get(exif.Orientation)
-	if err != nil {
-		return 0, 0
+	if err == nil {
+
+		orientation, err := tag.Int(0)
+
+		if err == nil {
+
+			switch orientation {
+			case topLeftSide:
+				// no change required
+			case topRightSide:
+				meta.Flip = FlipHorizontal
+			case bottomRightSide:
+				meta.Angle = 180
+			case bottomLeftSide:
+				meta.Angle = 180
+				meta.Flip = FlipHorizontal
+			case leftSideTop:
+				meta.Angle = -90
+				meta.Flip = FlipHorizontal
+			case rightSideTop:
+				meta.Angle = -90
+			case rightSideBottom:
+				meta.Angle = 90
+				meta.Flip = FlipHorizontal
+			case leftSideBottom:
+				meta.Angle = 90
+			}
+		}
 	}
 
-	orientation, err := tag.Int(0)
-
-	if err != nil {
-		return 0, 0
+	exifDate, err := ex.DateTime()
+	if err == nil {
+		meta.Taken = &exifDate
 	}
 
-	switch orientation {
-	case topLeftSide:
-		// no change required
-	case topRightSide:
-		flip = FlipHorizontal
-	case bottomRightSide:
-		angle = 180
-	case bottomLeftSide:
-		angle = 180
-		flip = FlipHorizontal
-	case leftSideTop:
-		angle = -90
-		flip = FlipHorizontal
-	case rightSideTop:
-		angle = -90
-	case rightSideBottom:
-		angle = 90
-		flip = FlipHorizontal
-	case leftSideBottom:
-		angle = 90
+	lat, long, err := ex.LatLong()
+	if err == nil {
+		meta.LatLong = &LatLong{lat, long}
 	}
 
-	return angle, flip
+	return meta
 }
 
-func Thumbnail(info Info) (image.Image, error) {
+func Thumbnail(info Info) (image.Image, Metadata, error) {
+
+	var meta Metadata
 
 	file, err := os.Open(info.Path)
 	if err != nil {
-		return nil, err
+		return nil, meta, err
 	}
 	defer file.Close()
 
@@ -260,13 +280,13 @@ func Thumbnail(info Info) (image.Image, error) {
 
 	if imgErr != nil {
 		log.Printf("Jpeg decode error: %v", imgErr)
-		return nil, imgErr
+		return nil, meta, imgErr
 	}
 
 	m := resize.Thumbnail(800, 800, img, resize.Bilinear)
-	angle, flip := ExifOrientation(&exifBuffer)
+	metadata := ExifExtract(&exifBuffer)
 
-	switch angle {
+	switch metadata.Angle {
 	case 90:
 		m = imaging.Rotate90(m)
 	case -90:
@@ -275,14 +295,14 @@ func Thumbnail(info Info) (image.Image, error) {
 		m = imaging.Rotate180(m)
 	}
 
-	switch flip {
+	switch metadata.Flip {
 	case FlipHorizontal:
 		m = imaging.FlipH(m)
 	case FlipVertical:
 		m = imaging.FlipV(m)
 	}
 
-	return m, nil
+	return m, metadata, nil
 }
 
 func Thumbnailer(in <-chan Info) <-chan Info {
@@ -307,7 +327,14 @@ func Thumbnailer(in <-chan Info) <-chan Info {
 				thumbFile.Close()
 
 				if err != nil {
-					thumb, resultErr := Thumbnail(info)
+					thumb, meta, resultErr := Thumbnail(info)
+					if meta.Taken != nil {
+						log.Printf("Date taken: %v", meta.Taken.Format(time.RFC3339))
+					}
+
+					if meta.LatLong != nil {
+						log.Printf("Lat: %f, lon: %f", meta.LatLong.Lat, meta.LatLong.Long)
+					}
 
 					if resultErr != nil {
 						log.Fatalf("Could not create a thumbnail: %v", resultErr)
