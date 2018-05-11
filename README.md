@@ -34,7 +34,7 @@ This is a side-project with me having not much time, so if you stumble upon it a
 - Favorite a photo (by attaching a plain text or json file in metadata directory)
 - Use a discardable, though permanent, key-value store for metadata index (boltdb?)
 - Show favorited photos
-- Track files moved - if there's a hash that doesn't have a file that points to it any longer, find out what happened to it - actually, if we index a new file with an apparently existing hash, we found the original. Also, original file's hash is metadata ID
+- Track files moved - if there's a hash that doesn't have the file it's originating from any longer, find out what happened to it - actually, if we index a new file with an apparently existing hash, we found the original. Also, original file's hash is metadata ID
 - Detect image file content change (for cases where e.g. a photo viewer modifies the photo after performing edits, like rotation, even the lossless rotation that JPEG allows) - if the same filename has a different hash, figure out the change
 - Tag photo
 - Show photos with given tag(s)
